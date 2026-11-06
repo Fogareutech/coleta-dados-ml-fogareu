@@ -1,0 +1,55 @@
+name: Atualizar ERA5
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"      # segunda, 06:00 UTC = 02:00 em Manaus
+  workflow_dispatch:          # permite rodar manualmente
+
+permissions:
+  contents: write
+
+concurrency:
+  group: era5
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CDSAPI_URL: https://cds.climate.copernicus.eu/api
+      CDSAPI_KEY: ${{ secrets.CDSAPI_KEY }}
+      TAG: era5-data
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install "cdsapi>=0.7.2"
+
+      - name: Garante que a release existe
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+          gh release create "$TAG" --title "ERA5 - dados brutos" --notes "NetCDF atualizados automaticamente."
+
+      - name: Baixa os arquivos já existentes
+        run: |
+          mkdir -p era5_raw
+          gh release download "$TAG" --dir era5_raw --pattern "*.nc" || echo "Nada para baixar"
+
+      - name: Marca o início da atualização
+        run: touch /tmp/inicio
+
+      - name: Atualiza a partir do CDS
+        run: timeout 300m python atualizar_era5.py
+
+      - name: Envia somente os arquivos novos ou alterados
+        if: always()
+        run: |
+          arquivos=$(find era5_raw -name "*.nc" -newer /tmp/inicio)
+          if [ -n "$arquivos" ]; then
+            gh release upload "$TAG" $arquivos --clobber
+          fi
